@@ -112,17 +112,3 @@ def eb_str(no_unit: bool = False) -> str:
 def isomer_energy() -> float:
     """Get constant."""
     return 0.3
-
-
-def contains_parallels(topology_code: cgx.scram.TopologyCode) -> bool:
-    """True if the graph contains "1-loops"."""
-    weighted_graph = topology_code.get_weighted_graph()
-    num_parallel_edges = len(
-        [
-            i
-            for i in weighted_graph.edges()
-            if i == 2  # noqa: PLR2004
-        ]
-    )
-
-    return num_parallel_edges != 0

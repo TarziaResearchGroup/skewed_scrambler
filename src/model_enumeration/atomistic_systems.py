@@ -26,7 +26,7 @@ from model_enumeration.mgen_utilities import (
     get_regraphed_molecule,
     get_vertexset_molecule,
 )
-from model_enumeration.utilities import contains_parallels, eb_str, multi_cmap
+from model_enumeration.utilities import eb_str, multi_cmap
 
 logging.basicConfig(
     level=logging.INFO,
@@ -835,7 +835,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
     """Run atomistic case study systems."""
     run = _parse_args().run
 
-    wd = pathlib.Path("/home/tarziaa/workingspace/tscram_production/")
+    wd = pathlib.Path("/home/tarziaa/workingspace/skewed_production/")
     run_prefix = "atomistic"
     calculation_dir = wd / f"{run_prefix}_calculations"
     calculation_dir.mkdir(exist_ok=True)
@@ -928,22 +928,20 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
             ditopic_building_block = pdict["di"]
 
             # Define a connectivity based on a multiplier.
-            iterator = cgx.scram.TopologyIterator(
+            iterator = cgx.scram.SkewedTopologyIterator(
                 building_block_counts={
                     tritopic_building_block: stoichiometry_t_d[0] * multiplier,
                     ditopic_building_block: stoichiometry_t_d[1] * multiplier,
                 },
-                graph_type=f"{stoichiometry_t_d[0] * multiplier}"
-                f"P{stoichiometry_t_d[1] * multiplier}",
-                graph_set="rx",
             )
             logging.info(
                 "graph iteration has %s graphs", iterator.count_graphs()
             )
+            raise SystemExit
 
             for idx, topology_code in enumerate(iterator.yield_graphs()):
                 # Filter graphs for 1-loops.
-                if contains_parallels(topology_code):
+                if topology_code.contains_parallels():
                     continue
 
                 generated_conformers = []

@@ -3,9 +3,11 @@ requires = ["setuptools", "setuptools-scm"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "topology_scrambler"
+name = "skewed_scrambler"
 maintainers = [{ name = "Andrew Tarzia", email = "andrew.tarzia@gmail.com" }]
-dependencies = ["cgexplore==2025.2.5.1"]
+dependencies = [
+    "cgexplore",
+]
 requires-python = ">=3.11"
 dynamic = ["version"]
 readme = "README.md"
@@ -14,13 +16,6 @@ readme = "README.md"
 dev = [
     "ruff",
     "mypy",
-    "pip-tools",
-    # TODO: Remove pin when https://github.com/TvoroG/pytest-lazy-fixture/issues/65 is resolved.
-    # pytest-lazy-fixture 0.6.0 is incompatible with pytest 8.0.0
-    "pytest<8",
-    "pytest-datadir",
-    "pytest-lazy-fixture",
-    "pytest-cov",
 ]
 
 [project.scripts]
@@ -30,14 +25,12 @@ cu18_systems = "model_enumeration.cu18_systems:main"
 tri_di_systems = "model_enumeration.tri_di_systems:main"
 atomistic_systems = "model_enumeration.atomistic_systems:main"
 starship_systems = "model_enumeration.starship_systems:main"
-write_chemiscope = "model_enumeration.write_chemiscope:main"
-four_comp_systems = "model_enumeration.four_comp_systems:main"
-pd_het_systems = "model_enumeration.unreported.pd_het_systems:main"
-rh_isomer_systems = "model_enumeration.unreported.rh_isomer_systems:main"
+rh_isomer_systems = "model_enumeration.rh_isomer_systems:main"
+m12l16_systems = "model_enumeration.m12l16_systems:main"
 
 
 [project.urls]
-github = "https://github.com/andrewtarzia/topology_scrambler"
+github = "https://github.com/TarziaResearchGroup/skewed_scrambler"
 
 [tool.setuptools_scm]
 write_to = "src/_version.py"

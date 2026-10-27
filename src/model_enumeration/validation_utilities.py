@@ -40,7 +40,7 @@ def analyse_cage(
     database_path: pathlib.Path,
     name: str,
     forcefield: cgx.forcefields.ForceField,
-    iterator: cgx.scram.TopologyIterator,
+    iterator: cgx.scram.SkewedTopologyIterator,
     topology_code: cgx.scram.TopologyCode,
 ) -> None:
     """Analyse toy model cage."""

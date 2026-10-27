@@ -881,7 +881,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
     run = args.run
     opt_ff = args.opt_ff
 
-    wd = pathlib.Path("/home/tarziaa/workingspace/tscram_production/")
+    wd = pathlib.Path("/home/tarziaa/workingspace/skewed_production/")
 
     run_prefix = "tri_di"
     calculation_dir = wd / f"{run_prefix}_calculations"
@@ -1290,18 +1290,16 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                 logging.info("doing: mix %s, multi %s", mix, multiplier)
 
                 # Define a connectivity based on a multiplier.
-                iterator = cgx.scram.TopologyIterator(
+                iterator = cgx.scram.SkewedTopologyIterator(
                     building_block_counts={
                         trigonal_bb: stoichiometry_t_d[0] * multiplier,
                         linear_bb: stoichiometry_t_d[1] * multiplier,
                     },
-                    graph_type=f"{stoichiometry_t_d[0] * multiplier}"
-                    f"P{stoichiometry_t_d[1] * multiplier}",
-                    graph_set="rx",
                 )
                 logging.info(
                     "graph iteration has %s graphs", iterator.count_graphs()
                 )
+                raise SystemExit
 
                 for idx, topology_code in enumerate(iterator.yield_graphs()):
                     generated_conformers = []

@@ -38,7 +38,6 @@ from model_enumeration.mgen_utilities import (
     tetra_bead,
 )
 from model_enumeration.utilities import (
-    contains_parallels,
     eb_str,
     isomer_energy,
     multi_cmap,
@@ -323,7 +322,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
     """Run starship case study studying Pd(II) heteroleptic systems."""
     run = _parse_args().run
 
-    wd = pathlib.Path("/home/tarziaa/workingspace/tscram_production/")
+    wd = pathlib.Path("/home/tarziaa/workingspace/skewed_production/")
 
     run_prefix = "starships"
     calculation_dir = wd / f"{run_prefix}_calculations"
@@ -839,7 +838,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                 logging.info("doing: pair %s, multi %s", pair, multiplier)
                 nmetals = pairs[pair]["stoichiometry_L_L_M"][2] * multiplier
                 # Define a connectivity based on a multiplier.
-                iterator = cgx.scram.TopologyIterator(
+                iterator = cgx.scram.SkewedTopologyIterator(
                     building_block_counts={
                         tetra_bb: pairs[pair]["stoichiometry_L_L_M"][2]
                         * multiplier,
@@ -848,12 +847,11 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                         small_bb: pairs[pair]["stoichiometry_L_L_M"][1]
                         * multiplier,
                     },
-                    graph_type=f"{1 * nmetals}P{2 * nmetals}",
-                    graph_set="rx",
                 )
                 logging.info(
                     "graph iteration has %s graphs", iterator.count_graphs()
                 )
+                raise SystemExit
 
                 possible_bbdicts = cgx.scram.get_custom_bb_configurations(
                     iterator=iterator
@@ -1036,6 +1034,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                                 for nmash_idx in range(len(attempts))
                             ]
                             if scale is None:
+                                raise SystemExit("implement this cheap one")
                                 conformer = cgx.scram.graph_optimise_cage(
                                     molecule=constructed_molecule,
                                     name=name,

@@ -11,17 +11,6 @@ This project is built on
 `cgx <https://cgexplore.readthedocs.io/en/latest/>`_ and
 `stk <https://stk.readthedocs.io/en/stable/>`_.
 
-Important:
-
-    This repository holds the code for completing the associated manuscript.
-    However, in the near future, I will merge important features into ``cgx``
-    and make improvements to stability and usability. I recommend using the
-    latest version of ``cgx`` for the best experience. However, to reproduce
-    this code exactly, use ``cgexplore==2025.2.5.1``.
-
-    The recipes at `cgx <https://cgexplore.readthedocs.io/en/latest/>`_
-    reproduce many of these examples, but with the latest interface and
-    improvements.
 
 Installation
 ============
@@ -93,15 +82,7 @@ recipes and examples in ``cgx``.
     Produces the dataset visualisation using chemiscope of the output of
     the atomistic case study and genetic algorithm case study.
 
-``pd_het_systems`` (unreported)
-    This script was unused in the final manuscript and aims to reproduce the
-    prediction of cis-M2L4 heteroleptic cage structures.
-
-``four_comp_systems`` (unreported)
-    This script builds the homoleptic and heteroleptic structures from four
-    components, predicting the stirrup structures.
-
-``rh_isomer_systems`` (unreported)
+``rh_isomer_systems``
     This script was not used in the final manuscript but predicts the
     structures of heteroleptic M6L6L6 metal-organic cages.
 

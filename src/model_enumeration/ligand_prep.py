@@ -152,7 +152,7 @@ def plot_distance_angle(
 
 def main() -> None:  # noqa: PLR0915
     """Run script."""
-    wd = pathlib.Path("/home/tarziaa/workingspace/tscram_production/")
+    wd = pathlib.Path("/home/tarziaa/workingspace/skewed_production/")
     run_prefix = "ligand_param"
     crest_path = pathlib.Path("/home/tarziaa/software/crest_301/crest")
     xtb_path = pathlib.Path(
@@ -169,16 +169,7 @@ def main() -> None:  # noqa: PLR0915
     ligands = {
         # cu18.
         "cu18_1": "C1=CC(=NC(=C1)C2=CC=C(C=C2)C(=O)O)C3=CC=C(C=C3)C(=O)O",
-        "cu18_90": "C1=CC2=C(C=C1C(=O)O)C3=C(N2)C=CC(=C3)C(=O)O",
-        # four_comp.
-        "four_comp_lin": "C1=CN=CC=C1C2=CC=NC=C2",
-        "four_comp_mxy": (
-            "C1=CC(=CC(=C1)CN2C=CC(=N2)C3=CC=NC=C3)CN4C=CC(=N4)C5=CC=NC=C5"
-        ),
-        "four_comp_pxy": (
-            "C1=CC(=CC=C1CN2C=C(C=N2)C3=CC=NC=C3)CN4C=C(C=N4)C5=CC=NC=C5"
-        ),
-        # tri_di.
+        "cu18_90": "C1=CC2=C(C=C1C(=O)O)C3=C(N2)C=CC(=C3)C(=O)O",  # tri_di.
         "tri_di_l1": "C(=CC(=O)O)C(=O)O",
         "tri_di_l2": "C1=CC(=CC=C1C(=O)O)C(=O)O",
         "tri_di_l5": "C1=CC2=C(C=CC(=C2)C(=O)O)C=C1C(=O)O",
@@ -190,7 +181,7 @@ def main() -> None:  # noqa: PLR0915
     have_alkynes = set()
     for ligand, lsmiles in ligands.items():
         stk.BuildingBlock(lsmiles).write(ligand_dir / f"{ligand}_unopt.mol")
-        if "tri_di" in ligand or "four_comp" in ligand or "cu18" in ligand:
+        if "tri_di" in ligand or "cu18" in ligand:
             new_dir = calculation_dir / f"{ligand}_confs"
             new_dir.mkdir(exist_ok=True)
             logging.info("building confs for %s", ligand)

@@ -1,4 +1,4 @@
-name: meproduction
+name: meproduction2
 channels:
   - conda-forge
 dependencies:
@@ -382,8 +382,6 @@ dependencies:
     - stk==2024.10.2.0
     - stko==2025.12.7.1
     - threadpoolctl==3.5.0
-    - topology_scrambler==0.1.dev326+g32b152841.d20260412
     - vabene==0.0.5
     - wcwidth==0.2.13
     - widgetsnbextension==4.0.13
-

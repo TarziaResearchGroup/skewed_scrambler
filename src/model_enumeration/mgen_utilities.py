@@ -537,7 +537,7 @@ def make_opt_plot(
 def get_regraphed_molecule(
     scale: str,
     topology_code: cgx.scram.TopologyCode,
-    iterator: cgx.scram.TopologyIterator,
+    iterator: cgx.scram.SkewedTopologyIterator,
     bb_config: cgx.scram.BuildingBlockConfiguration | None,
 ) -> stk.ConstructedMolecule:
     """Take a graph that considers all atoms, and get atom positions."""
@@ -570,7 +570,7 @@ def get_regraphed_molecule(
 def get_vertexset_molecule(
     scale: str,
     topology_code: cgx.scram.TopologyCode,
-    iterator: cgx.scram.TopologyIterator,
+    iterator: cgx.scram.SkewedTopologyIterator,
     bb_config: cgx.scram.BuildingBlockConfiguration,
 ) -> stk.ConstructedMolecule:
     """Take a graph and genereate from graph vertex positions.."""

@@ -47,12 +47,6 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="set to iterate through structure functions",
     )
-    parser.add_argument(
-        "--nodoubles",
-        action="store_true",
-        help="set to only study no double-walls",
-    )
-
     return parser.parse_args()
 
 
@@ -504,9 +498,9 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
     """Run script."""
     args = _parse_args()
 
-    wd = pathlib.Path("/home/tarziaa/workingspace/tscram_production/")
+    wd = pathlib.Path("/home/tarziaa/workingspace/skewed_production/")
     (wd / "figures").mkdir(exist_ok=True)
-    run_prefix = "mnl2n_d" if args.nodoubles else "mnl2n_i"
+    run_prefix = "mnl2n_i"
     figure_dir = wd / "figures" / run_prefix
 
     calculation_dir = wd / f"{run_prefix}_calculations"
@@ -515,7 +509,6 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
     data_dir = wd / f"{run_prefix}_data"
     database_path = data_dir / f"{run_prefix}_run.db"
     timing_file = data_dir / f"{run_prefix}_times.csv"
-    max_num = 10000
 
     calculation_dir.mkdir(exist_ok=True)
     structure_dir.mkdir(exist_ok=True)
@@ -584,13 +577,11 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
             tetra_bb = tetra_bb.clone()
 
             for multiplier in ligands[lig]["multipliers"]:
-                iterator = cgx.scram.TopologyIterator(
+                iterator = cgx.scram.SkewedTopologyIterator(
                     building_block_counts={
                         tetra_bb: stoichimetry_l_m[1] * multiplier,
                         ditopic_bb: stoichimetry_l_m[0] * multiplier,
                     },
-                    graph_type=f"{1 * multiplier}P{2 * multiplier}",
-                    graph_set="rx_nodoubles" if args.nodoubles else "rx",
                 )
 
                 logging.info(
@@ -599,6 +590,7 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
                     multiplier,
                     iterator.count_graphs(),
                 )
+                raise SystemExit
 
                 for idx, topology_code in enumerate(iterator.yield_graphs()):
                     if max_num is not None and idx > max_num:
@@ -651,6 +643,7 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
                         try:
                             st1 = time.time()
                             if vertex_positions is None:
+                                raise SystemExit("implement this cheap one")
                                 conformer = opt_function(
                                     molecule=constructed_molecule,
                                     name=name,

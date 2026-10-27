@@ -28,7 +28,6 @@ from model_enumeration.mgen_utilities import (
     precursors_to_forcefield,
 )
 from model_enumeration.utilities import (
-    contains_parallels,
     eb_str,
     isomer_energy,
     multi_cmap,
@@ -520,7 +519,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
     """Run starship case study studying Rh heteroleptic systems."""
     run = _parse_args().run
 
-    wd = pathlib.Path("/home/tarziaa/workingspace/tscram_production/")
+    wd = pathlib.Path("/home/tarziaa/workingspace/skewed_production/")
     run_prefix = "rh_isomer"
     calculation_dir = wd / f"{run_prefix}_calculations"
     calculation_dir.mkdir(exist_ok=True)
@@ -632,18 +631,17 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
             for multiplier in pairs[pair]["multipliers"]:
                 logging.info("doing: pair %s, multi %s", pair, multiplier)
                 # Define a connectivity based on a multiplier.
-                iterator = cgx.scram.TopologyIterator(
+                iterator = cgx.scram.SkewedTopologyIterator(
                     building_block_counts={
                         tetra_bb: stoichiometry_l_l_m[2] * multiplier,
                         large_bb: stoichiometry_l_l_m[0] * multiplier,
                         small_bb: stoichiometry_l_l_m[1] * multiplier,
                     },
-                    graph_type=f"{1 * multiplier}P{2 * multiplier}",
-                    graph_set="rx",
                 )
                 logging.info(
                     "graph iteration has %s graphs", iterator.count_graphs()
                 )
+                raise SystemExit
 
                 possible_bbdicts = cgx.scram.get_custom_bb_configurations(
                     iterator=iterator
@@ -711,6 +709,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                                 for nmash_idx in range(len(attempts))
                             ]
                             if scale is None:
+                                raise SystemExit("implement this cheap one")
                                 conformer = cgx.scram.graph_optimise_cage(
                                     molecule=constructed_molecule,
                                     name=name,
@@ -730,6 +729,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                                     shutil.copy(wipfinal, wipfinal_new)
 
                             else:
+                                raise SystemExit("implement this cheap one")
                                 conformer = cgx.scram.optimise_cage(
                                     molecule=constructed_molecule,
                                     name=name,
@@ -817,31 +817,31 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
     study_4_plot_5(
         database_path=database_path,
         figure_dir=figure_dir,
-        filename="rh_isomer_1.png",
+        filename=f"{run_prefix}_1.png",
     )
     study_4_plot_2(
         database_path=database_path,
         figure_dir=figure_dir,
-        filename="rh_isomer_2.png",
+        filename=f"{run_prefix}_2.png",
     )
 
     make_summary_plot(
         database_path=database_path,
         figure_dir=figure_dir,
-        filename="rh_isomer_3.png",
+        filename=f"{run_prefix}_3.png",
         pairs=pairs_to_predict,
     )
     make_summary_plot2(
         database_path=database_path,
         figure_dir=figure_dir,
-        filename="rh_isomer_4.png",
+        filename=f"{run_prefix}_4.png",
         pairs=pairs_to_predict,
         structure_dir=structure_dir,
     )
     study_4_plot(
         database_path=database_path,
         figure_dir=figure_dir,
-        filename="rh_isomer_5.png",
+        filename=f"{run_prefix}_5.png",
     )
 
 

@@ -39,7 +39,6 @@ from model_enumeration.mgen_utilities import (
     tetra_bead,
 )
 from model_enumeration.utilities import (
-    contains_parallels,
     eb_str,
     isomer_energy,
     multi_cmap,
@@ -2007,7 +2006,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
     """Run case study studying PW heteroleptic systems."""
     run = _parse_args().run
 
-    wd = pathlib.Path("/home/tarziaa/workingspace/tscram_production/")
+    wd = pathlib.Path("/home/tarziaa/workingspace/skewed_production/")
     run_prefix = "cu18"
     calculation_dir = wd / f"{run_prefix}_calculations"
     calculation_dir.mkdir(exist_ok=True)
@@ -2041,6 +2040,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
         (7, 7, 7),
         (8, 8, 8),
     )
+    raise SystemExit("add all possibilities")
     ligand_measures = {
         "cs41a": {"ba": 1.5, "aa": 9.5, "bac": 145},
         "cs41b": {"ba": 5.7, "aa": 2.4, "bac": 145},
@@ -2163,19 +2163,17 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                     "doing: pair %s, stoichstring %s", pair, stoichstring
                 )
                 # Define a connectivity based on a multiplier.
-                iterator = cgx.scram.TopologyIterator(
+                iterator = cgx.scram.SkewedTopologyIterator(
                     building_block_counts={
                         tetra_bb: stoichiometry_l_s_m[2],
                         large_bb: stoichiometry_l_s_m[0],
                         small_bb: stoichiometry_l_s_m[1],
                     },
-                    graph_type=f"{1 * multiplier}P{2 * multiplier}",
-                    graph_set="rx",
                 )
                 all_topology_codes = tuple(enumerate(iterator.yield_graphs()))
                 topology_codes = []
                 for tidx, tc in all_topology_codes:
-                    if contains_parallels(tc):
+                    if tc.contains_parallels():
                         continue
                     topology_codes.append((tidx, tc))
 
@@ -2185,6 +2183,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                     len(all_topology_codes),
                 )
                 logging.info("filtering for parallels!")
+                raise SystemExit
 
                 possible_bbdicts = cgx.scram.get_custom_bb_configurations(
                     iterator=iterator
@@ -2210,6 +2209,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                 )
 
                 # Define fitness calculator.
+                raise SystemExit("implement this cheap one")
                 fitness_calculator = (
                     cgx.systems_optimisation.FitnessCalculator(
                         fitness_function=fitness_function,

@@ -1,7 +1,6 @@
 """Script to generate and optimise CG models."""
 
 import argparse
-import itertools as it
 import logging
 import os
 import pathlib
@@ -15,22 +14,17 @@ import atomlite
 import cgexplore as cgx
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-import networkx as nx
-import numpy as np
 import polars as pl
 import stk
+import stko
 from openmm import OpenMMException
 from rdkit import RDLogger
 
-from model_enumeration.utilities import eb_str, isomer_energy, multi_cmap
-from model_enumeration.validation_utilities import (
-    abead_d,
-    analyse_cage,
-    binder_bead,
-    cbead_d,
-    get_validation_forcefield,
-    tetra_bead,
+from model_enumeration.mgen_utilities import (
+    construct_cage,
+    custom_optimise_cage,
 )
+from model_enumeration.utilities import eb_str, isomer_energy, multi_cmap
 
 logging.basicConfig(
     level=logging.INFO,
@@ -65,7 +59,7 @@ def make_opt_plot(
     database_path: pathlib.Path,
     figure_dir: pathlib.Path,
     filename: str,
-) -> dict:
+) -> None:
     """Visualise stage of the optimisation produces the low-E conformer."""
     fig, ax = plt.subplots(figsize=(8, 5))
 
@@ -138,17 +132,17 @@ def make_plot(  # noqa: C901, PLR0915
 ) -> None:
     """Plot energies."""
     energies = defaultdict(list)
-    bacs = defaultdict(list)
+    varies = defaultdict(list)
     for entry in cgx.utilities.AtomliteDatabase(database_path).get_entries():
         multi = entry.properties["multiplier"]
         energy = entry.properties["energy_per_bb"]
-        bac_angle = entry.properties["forcefield_dict"]["v_dict"]["b_a_c"]
+        vary_angle = entry.properties["forcefield_dict"]["v_dict"]["n_d_b"]
 
         if entry.properties["num_components"] > 1:
             continue
 
-        energies[multi].append((bac_angle, energy, entry.key))
-        bacs[bac_angle].append((multi, energy, entry.key))
+        energies[multi].append((vary_angle, energy, entry.key))
+        varies[vary_angle].append((multi, energy, entry.key))
 
     fig, (axx, ax) = plt.subplots(
         nrows=2,
@@ -164,18 +158,18 @@ def make_plot(  # noqa: C901, PLR0915
         min_energy_tuple = min(energies[idx], key=lambda p: p[1])
 
         bac_line = []
-        for bac_angle in sorted(bacs):
-            rel_energies = [i[1] for i in energies[idx] if i[0] == bac_angle]
+        for vary_angle in sorted(varies):
+            rel_energies = [i[1] for i in energies[idx] if i[0] == vary_angle]
             if len(rel_energies) == 0:
                 continue
             min_energy = min(rel_energies)
-            bac_line.append((bac_angle, min_energy))
+            bac_line.append((vary_angle, min_energy))
 
             found_names_minus_mash = set()
             stable = []
             for entry_data in energies[idx]:
                 if (
-                    entry_data[0] == bac_angle
+                    entry_data[0] == vary_angle
                     and entry_data[1] < isomer_energy()
                 ):
                     names_minus_mash = "_".join(entry_data[-1].split("_")[:-1])
@@ -188,9 +182,9 @@ def make_plot(  # noqa: C901, PLR0915
             if len(stable) > 0:
                 logging.info("stable cages: %s", stable)
                 instable = True
-            if bac_angle not in countsx:
-                countsx[bac_angle] = 0
-            countsx[bac_angle] += len(stable)
+            if vary_angle not in countsx:
+                countsx[vary_angle] = 0
+            countsx[vary_angle] += len(stable)
 
         ax.plot(
             [i[0] for i in bac_line],
@@ -231,95 +225,7 @@ def make_plot(  # noqa: C901, PLR0915
     for lh in leg.legend_handles:
         lh.set_alpha(1)
 
-    ax.set_xlabel("target $bac$ angle [$^\\circ$]", fontsize=16)
-
-    fig.tight_layout()
-    fig.savefig(figure_dir / filename, dpi=360, bbox_inches="tight")
-    fig.savefig(
-        figure_dir / filename.replace(".png", ".pdf"),
-        dpi=360,
-        bbox_inches="tight",
-    )
-    plt.close()
-
-
-def make_main_plot(
-    figure_dir: pathlib.Path,
-    database_path: pathlib.Path,
-    filename: str,
-) -> None:
-    """Plot energies."""
-    energies = defaultdict(list)
-    bacs = defaultdict(list)
-    graphs = defaultdict(set)
-
-    for entry in cgx.utilities.AtomliteDatabase(database_path).get_entries():
-        multi = entry.properties["multiplier"]
-        energy = entry.properties["energy_per_bb"]
-        bac_angle = entry.properties["forcefield_dict"]["v_dict"]["b_a_c"]
-
-        lig, multiplier, idx, mash_idx = entry.key.split("_")
-        if entry.properties["num_components"] > 1:
-            continue
-
-        energies[multi].append((bac_angle, energy, entry.key))
-        bacs[bac_angle].append((multi, energy, entry.key))
-        graphs[multi].add(idx)
-
-    fig, ax = plt.subplots(figsize=(8, 2))
-    for i, multi in enumerate(sorted([int(i) for i in energies])):
-        idx = str(multi)
-        logging.info(
-            "there are %s graphs in m=%s", len(list(graphs[idx])), idx
-        )
-
-        bac_line = []
-        for bac_angle in sorted(bacs):
-            rel_energies = [i[1] for i in energies[idx] if i[0] == bac_angle]
-            if len(rel_energies) == 0:
-                continue
-            min_energy = min(rel_energies)
-            bac_line.append((bac_angle, min_energy))
-
-            found_names_minus_mash = set()
-            stable = []
-            for entry_data in energies[idx]:
-                if (
-                    entry_data[0] == bac_angle
-                    and entry_data[1] < isomer_energy()
-                ):
-                    names_minus_mash = "_".join(entry_data[-1].split("_")[:-1])
-
-                    if names_minus_mash in found_names_minus_mash:
-                        continue
-                    found_names_minus_mash.add(names_minus_mash)
-                    stable.append(entry_data)
-
-        ax.plot(
-            [i[0] for i in bac_line],
-            [i[1] for i in bac_line],
-            c=multi_cmap[str(multi)],
-            ls="-",
-            marker="o",
-            markersize=10,
-            markeredgecolor="k",
-            alpha=1.0,
-            zorder=2,
-            label=f"M{idx}",
-        )
-
-    ax.tick_params(axis="both", which="major", labelsize=16)
-    ax.axhspan(ymin=0, ymax=isomer_energy(), facecolor="k", alpha=0.05)
-    ax.set_ylabel(eb_str(), fontsize=16)
-    ax.set_xlim(85, 155)
-    ax.set_xticks([90, 100, 110, 120, 130, 140, 150])
-    ax.set_ylim(0, 2)
-
-    leg = ax.legend(ncols=3, fontsize=12)
-    for lh in leg.legend_handles:
-        lh.set_alpha(1)
-
-    ax.set_xlabel("$bac$ angle [$^\\circ$]", fontsize=16)
+    ax.set_xlabel("target angle [$^\\circ$]", fontsize=16)
 
     fig.tight_layout()
     fig.savefig(figure_dir / filename, dpi=360, bbox_inches="tight")
@@ -505,7 +411,7 @@ def make_summary_plot(
     plt.close()
 
 
-def main() -> None:  # noqa: PLR0915, C901, PLR0912
+def main() -> None:  # noqa: PLR0915, C901
     """Run script."""
     args = _parse_args()
 
@@ -557,12 +463,18 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
         bead=bead_library.get_from_type("m"),
         abead1=bead_library.get_from_type("b"),
     )
-    stoichimetry_l_m = (2, 1)
-    studies = ({"ndb": 160, "multi": (1, 2, 3, 4)},)
+    stoichimetry_4_3 = (3, 4)
+    studies = (
+        {"ndb": 150, "multi": (1, 2, 3, 4)},
+        {"ndb": 155, "multi": (1, 2, 3, 4)},
+        {"ndb": 160, "multi": (1, 2, 3, 4)},
+        {"ndb": 165, "multi": (1, 2, 3, 4)},
+        {"ndb": 170, "multi": (1, 2, 3, 4)},
+    )
     ligands = {
-        str(i["bac"]): {
+        str(i["ndb"]): {
             "forcefield": cgx.systems_optimisation.get_forcefield_from_dict(
-                identifier=str(i["bac"]),
+                identifier=str(i["ndb"]),
                 prefix="min_val",
                 vdw_bond_cutoff=2,
                 present_beads=bead_library.get_present_beads(),
@@ -587,15 +499,15 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
             tritopic_name = (
                 f"{tritopic.get_name()}_f{forcefield.get_identifier()}"
             )
-            ditopic_bb = cgx.utilities.optimise_ligand(
+            tritopic_bb = cgx.utilities.optimise_ligand(
                 molecule=tritopic.get_building_block(),
                 name=tritopic_name,
                 output_dir=calculation_dir,
                 forcefield=forcefield,
                 platform=None,
             )
-            ditopic_bb.write(str(ligand_dir / f"{tritopic_name}_optl.mol"))
-            ditopic_bb = ditopic_bb.clone()
+            tritopic_bb.write(str(ligand_dir / f"{tritopic_name}_optl.mol"))
+            tritopic_bb = tritopic_bb.clone()
 
             tetra_name = f"{tetra.get_name()}_f{forcefield.get_identifier()}"
             tetra_bb = cgx.utilities.optimise_ligand(
@@ -607,12 +519,11 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
             )
             tetra_bb.write(str(ligand_dir / f"{tetra_name}_optl.mol"))
             tetra_bb = tetra_bb.clone()
-
             for multiplier in ligands[lig]["multipliers"]:
                 iterator = cgx.scram.SkewedTopologyIterator(
                     building_block_counts={
-                        tetra_bb: stoichimetry_l_m[1] * multiplier,
-                        tritopic_bb: stoichimetry_l_m[0] * multiplier,
+                        tetra_bb: stoichimetry_4_3[0] * multiplier,
+                        tritopic_bb: stoichimetry_4_3[1] * multiplier,
                     },
                 )
 
@@ -622,47 +533,32 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
                     multiplier,
                     iterator.count_graphs(),
                 )
-                raise SystemExit
 
                 for topology_code in iterator.yield_graphs():
+                    s = time.time()
+                    config_name = f"{lig}_{multiplier}_{topology_code.idx}"
+
+                    if cgx.utilities.AtomliteDatabase(
+                        database_path
+                    ).has_molecule(key=config_name):
+                        continue
+
                     for midx, (method, layout_type, scale) in enumerate(
                         attempts
                     ):
-                        name = f"{lig}_{multiplier}_{topology_code.idx}_{midx}"
+                        name = f"{config_name}_{midx}"
+                        conformer_db_path = calculation_dir / f"{name}.db"
 
                         try:
-                            if method == "regraphed":
-                                constructed_molecule = (
-                                    cgx.scram.get_regraphed_molecule(
-                                        layout_type=layout_type,  # type:ignore[arg-type]
-                                        scale=scale,  # type:ignore[arg-type]
-                                        topology_code=topology_code,
-                                        iterator=iterator,
-                                        configuration=None,
-                                    )
-                                )
-
-                            elif method == "set":
-                                constructed_molecule = (
-                                    cgx.scram.get_vertexset_molecule(
-                                        layout_type=layout_type,  # type:ignore[arg-type]
-                                        scale=scale,  # type:ignore[arg-type]
-                                        topology_code=topology_code,
-                                        iterator=iterator,
-                                        configuration=None,
-                                    )
-                                )
-
-                            else:
-                                constructed_molecule = (
-                                    cgx.scram.try_except_construction(
-                                        iterator=iterator,
-                                        topology_code=topology_code,
-                                        configuration=None,
-                                        vertex_positions=None,
-                                    ).with_centroid(np.array((0.0, 0.0, 0.0)))
-                                )
-
+                            constructed_molecule = construct_cage(
+                                method=method,
+                                layout_type=layout_type,  # type:ignore[arg-type]
+                                scale=scale,  # type:ignore[arg-type]
+                                topology_code=topology_code,
+                                iterator=iterator,
+                                configuration=None,
+                                vertex_positions=None,
+                            )
                         except ValueError:
                             continue
 
@@ -670,7 +566,6 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
                         logger.info("building %s", name)
 
                         try:
-                            raise SystemExit("implement this cheap one")
                             conformer = custom_optimise_cage(
                                 molecule=constructed_molecule,
                                 name=name,
@@ -712,10 +607,11 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
                                     "energy_per_bb": energy_per_bb,
                                     "num_components": num_components,
                                     "mash_idx": midx,
-                                    "config_name": eval_name,
+                                    "config_name": config_name,
                                     "num_bbs": (
                                         iterator.get_num_building_blocks()
                                     ),
+                                    "multiplier": str(multiplier),
                                     "topology_code_vmap": tuple(
                                         (int(i[0]), int(i[1]))
                                         for i in topology_code.vertex_map
@@ -728,7 +624,7 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
                                     property_dict=properties,  # type:ignore[arg-type]
                                 )
 
-                        except (openmm.OpenMMException, ValueError):
+                        except (OpenMMException, ValueError):
                             logger.info("failed optimisation of %s", name)
 
                     conformer_db = cgx.utilities.AtomliteDatabase(
@@ -759,7 +655,7 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
 
                     # To file.
                     min_energy_structure.write(  # type:ignore[union-attr]
-                        str(struct_output / f"{eval_name}_optc.mol")
+                        str(structure_dir / f"{config_name}_optc.mol")
                     )
                     logger.info(
                         "Time taken for full opt: %s",
@@ -769,7 +665,7 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
                     # To database.
                     cgx.utilities.AtomliteDatabase(database_path).add_molecule(
                         molecule=min_energy_structure,  # type:ignore[arg-type]
-                        key=eval_name,
+                        key=config_name,
                     )
                     initial_properties = (
                         cgx.utilities.AtomliteDatabase(conformer_db_path)
@@ -779,40 +675,17 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
                     cgx.utilities.AtomliteDatabase(
                         database_path
                     ).add_properties(
-                        key=eval_name,
+                        key=config_name,
                         property_dict=initial_properties,
                     )
 
-                    nauty_cert = get_nauty_certificate(graph)
                     properties = {
-                        "grpsize": get_nauty_automoprhism_grpsize(graph),
-                        "nauty_key": str(nauty_cert),
                         "lowest_e_of_mash": True,
-                        "skewness_upper_bound": skewness_upper_bound(graph),
                     }
                     cgx.utilities.AtomliteDatabase(
                         database_path
-                    ).add_properties(
-                        key=eval_name,
-                        property_dict=properties,
-                    )
+                    ).add_properties(key=config_name, property_dict=properties)
 
-                    # To database.
-                    cgx.utilities.AtomliteDatabase(
-                        graph_database_path
-                    ).add_molecule(
-                        molecule=min_energy_structure,  # type:ignore[arg-type]
-                        key=str(nauty_cert),
-                    )
-                    properties = {
-                        "eval_name": eval_name,
-                    }
-                    cgx.utilities.AtomliteDatabase(
-                        graph_database_path
-                    ).add_properties(
-                        key=str(nauty_cert),
-                        property_dict=properties,
-                    )
                 make_plot(
                     database_path=database_path,
                     figure_dir=figure_dir,
@@ -824,11 +697,6 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
         structure_dir=structure_dir,
         figure_dir=figure_dir,
         filename=f"{run_prefix}_2.png",
-    )
-    make_main_plot(
-        database_path=database_path,
-        figure_dir=figure_dir,
-        filename=f"{run_prefix}_1c.png",
     )
     make_plot(
         database_path=database_path,

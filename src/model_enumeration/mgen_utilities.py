@@ -8,18 +8,298 @@ from copy import deepcopy
 
 # A fix for something with threads.
 os.environ["OMP_NUM_THREADS"] = "6"
+import os
+import time
+
 import atomlite
 import cgexplore as cgx
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
+import openmm
 import rustworkx as rx
 import stk
 import stko
-from openmm import openmm
 from scipy import optimize
 
 from model_enumeration.utilities import eb_str
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+
+def custom_optimise_cage(  # noqa: C901, PLR0913, PLR0915
+    molecule: stk.Molecule,
+    name: str,
+    output_dir: pathlib.Path,
+    potential_names: list[str],
+    forcefield: cgx.forcefields.ForceField,
+    platform: str | None,
+    database_path: pathlib.Path,
+    potential_file_suffix: str = "final",
+) -> cgx.molecular.Conformer:
+    """Optimise a toy model cage."""
+    fina_mol_file = output_dir / f"{name}_final.mol"
+
+    database = cgx.utilities.AtomliteDatabase(database_path)
+    # Do not rerun if database entry exists.
+    if database.has_molecule(key=name):
+        final_molecule = database.get_molecule(key=name)
+        final_molecule.write(fina_mol_file)
+        return cgx.molecular.Conformer(
+            molecule=final_molecule,
+            energy_decomposition=database.get_property(  # type:ignore[arg-type]
+                key=name,
+                property_key="energy_decomposition",
+                property_type=dict,
+            ),
+        )
+
+    # Do not rerun if final mol exists.
+    if fina_mol_file.exists():
+        ensemble = cgx.molecular.Ensemble(
+            base_molecule=molecule,
+            base_mol_path=output_dir / f"{name}_base.mol",
+            conformer_xyz=output_dir / f"{name}_ensemble.xyz",
+            data_json=output_dir / f"{name}_ensemble.json",
+            overwrite=False,
+        )
+        conformer = ensemble.get_lowest_e_conformer()
+        database.add_molecule(molecule=conformer.molecule, key=name)
+        database.add_properties(
+            key=name,
+            property_dict={
+                "energy_decomposition": conformer.energy_decomposition,  # type:ignore[dict-item]
+                "source": conformer.source,
+                "optimised": True,
+            },
+        )
+        return ensemble.get_lowest_e_conformer()
+
+    assigned_system = forcefield.assign_terms(molecule, name, output_dir)
+
+    ensemble = cgx.molecular.Ensemble(
+        base_molecule=molecule,
+        base_mol_path=output_dir / f"{name}_base.mol",
+        conformer_xyz=output_dir / f"{name}_ensemble.xyz",
+        data_json=output_dir / f"{name}_ensemble.json",
+        overwrite=True,
+    )
+    s = time.time()
+    temp_molecule = cgx.utilities.run_constrained_optimisation(
+        assigned_system=assigned_system,
+        name=name,
+        output_dir=output_dir,
+        bond_ff_scale=10,
+        angle_ff_scale=10,
+        max_iterations=20,
+        platform=platform,
+    )
+    logger.info("1: %s", round(time.time() - s, 2))
+
+    s = time.time()
+    conformer = cgx.utilities.run_optimisation(
+        assigned_system=cgx.forcefields.AssignedSystem(
+            molecule=temp_molecule,
+            forcefield_terms=assigned_system.forcefield_terms,
+            system_xml=assigned_system.system_xml,
+            topology_xml=assigned_system.topology_xml,
+            bead_set=assigned_system.bead_set,
+            vdw_bond_cutoff=assigned_system.vdw_bond_cutoff,
+        ),
+        name=name,
+        file_suffix="opt1",
+        output_dir=output_dir,
+        platform=platform,
+    )
+    ensemble.add_conformer(conformer=conformer, source="opt1")
+    logger.info("2: %s", round(time.time() - s, 2))
+
+    # Run optimisations of series of conformers with shifted out
+    # building blocks.
+    s = time.time()
+    for test_molecule in cgx.utilities.yield_shifted_models(
+        temp_molecule,
+        forcefield,
+        kicks=(2,),
+    ):
+        conformer = cgx.utilities.run_optimisation(
+            assigned_system=cgx.forcefields.AssignedSystem(
+                molecule=test_molecule,
+                forcefield_terms=assigned_system.forcefield_terms,
+                system_xml=assigned_system.system_xml,
+                topology_xml=assigned_system.topology_xml,
+                bead_set=assigned_system.bead_set,
+                vdw_bond_cutoff=assigned_system.vdw_bond_cutoff,
+            ),
+            name=name,
+            file_suffix="sopt",
+            output_dir=output_dir,
+            platform=platform,
+        )
+
+        ensemble.add_conformer(conformer=conformer, source="shifted")
+    logger.info("3: %s", round(time.time() - s, 2))
+
+    s = time.time()
+    # Scan potential name files.
+    for potential_name in potential_names:
+        potential_file = (
+            output_dir / f"{potential_name}_{potential_file_suffix}.mol"
+        )
+
+        if not potential_file.exists():
+            continue
+
+        test_molecule = stk.BuildingBlock.init_from_file(potential_file)
+
+        conformer = cgx.utilities.run_optimisation(
+            # Move to avoid reassignment - if the bonding changes, this should
+            # not work.
+            assigned_system=cgx.forcefields.AssignedSystem(
+                molecule=test_molecule,
+                forcefield_terms=assigned_system.forcefield_terms,
+                system_xml=assigned_system.system_xml,
+                topology_xml=assigned_system.topology_xml,
+                bead_set=assigned_system.bead_set,
+                vdw_bond_cutoff=assigned_system.vdw_bond_cutoff,
+            ),
+            name=name,
+            file_suffix="ns",
+            output_dir=output_dir,
+            platform=platform,
+        )
+
+        ensemble.add_conformer(conformer=conformer, source="ns")
+    logger.info("4: %s", round(time.time() - s, 2))
+
+    s = time.time()
+    num_steps = 1000
+    traj_freq = 100
+    soft_md_trajectory = cgx.utilities.run_soft_md_cycle(
+        name=name,
+        assigned_system=cgx.forcefields.AssignedSystem(
+            molecule=ensemble.get_lowest_e_conformer().molecule,
+            forcefield_terms=assigned_system.forcefield_terms,
+            system_xml=assigned_system.system_xml,
+            topology_xml=assigned_system.topology_xml,
+            bead_set=assigned_system.bead_set,
+            vdw_bond_cutoff=assigned_system.vdw_bond_cutoff,
+        ),
+        output_dir=output_dir,
+        suffix="smd",
+        bond_ff_scale=10,
+        angle_ff_scale=10,
+        temperature=300 * openmm.unit.kelvin,
+        num_steps=num_steps,
+        time_step=0.5 * openmm.unit.femtoseconds,
+        friction=1.0 / openmm.unit.picosecond,
+        reporting_freq=traj_freq,
+        traj_freq=traj_freq,
+        platform=platform,
+    )
+    logger.info("5: %s", round(time.time() - s, 2))
+
+    failed_md = False
+    if soft_md_trajectory is None:
+        failed_md = True
+
+    s = time.time()
+    if not failed_md:
+        soft_md_data = soft_md_trajectory.get_data()  # type:ignore[union-attr]
+        # Check that the trajectory is as long as it should be.
+        if len(soft_md_data) != num_steps / traj_freq:
+            failed_md = True
+
+        # Go through each conformer from soft MD.
+        # Optimise them all.
+        for md_conformer in soft_md_trajectory.yield_conformers():  # type:ignore[union-attr]
+            if failed_md:
+                continue
+            conformer = cgx.utilities.run_optimisation(
+                assigned_system=cgx.forcefields.AssignedSystem(
+                    molecule=md_conformer.molecule,
+                    forcefield_terms=assigned_system.forcefield_terms,
+                    system_xml=assigned_system.system_xml,
+                    topology_xml=assigned_system.topology_xml,
+                    bead_set=assigned_system.bead_set,
+                    vdw_bond_cutoff=assigned_system.vdw_bond_cutoff,
+                ),
+                name=name,
+                file_suffix="smd_mdc",
+                output_dir=output_dir,
+                platform=platform,
+            )
+            ensemble.add_conformer(conformer=conformer, source="smd")
+    logger.info("6: %s", round(time.time() - s, 2))
+
+    ensemble.write_conformers_to_file()
+
+    min_energy_conformer = ensemble.get_lowest_e_conformer()
+    min_energy_conformerid = min_energy_conformer.conformer_id
+    min_energy: float = min_energy_conformer.energy_decomposition[
+        "total energy"
+    ][0]
+    logger.info(
+        "%s from %s with energy: %s kJ.mol-1",
+        min_energy_conformerid,
+        min_energy_conformer.source,
+        round(min_energy, 2),
+    )
+
+    # Add to atomlite database.
+    database.add_molecule(molecule=min_energy_conformer.molecule, key=name)
+    database.add_properties(
+        key=name,
+        property_dict={
+            "energy_decomposition": min_energy_conformer.energy_decomposition,  # type:ignore[dict-item]
+            "source": min_energy_conformer.source,
+            "optimised": True,
+        },
+    )
+    min_energy_conformer.molecule.write(fina_mol_file)
+    return min_energy_conformer
+
+
+def construct_cage(  # noqa: PLR0913
+    method: str,
+    layout_type: str,
+    scale: float,
+    topology_code: cgx.scram.TopologyCode,
+    iterator: cgx.scram.TopologyIterator | cgx.scram.SkewedTopologyIterator,
+    configuration: cgx.scram.Configuration | None = None,
+    vertex_positions: None = None,
+) -> stk.ConstructedMolecule:
+    """Run the construction options."""
+    if method == "regraphed":
+        constructed_molecule = cgx.scram.get_regraphed_molecule(
+            layout_type=layout_type,  # type:ignore[arg-type]
+            scale=scale,  # type:ignore[arg-type]
+            topology_code=topology_code,
+            iterator=iterator,
+            configuration=configuration,
+        )
+
+    elif method == "set":
+        constructed_molecule = cgx.scram.get_vertexset_molecule(
+            layout_type=layout_type,  # type:ignore[arg-type]
+            scale=scale,  # type:ignore[arg-type]
+            topology_code=topology_code,
+            iterator=iterator,
+            configuration=configuration,
+        )
+
+    else:
+        constructed_molecule = cgx.scram.try_except_construction(
+            iterator=iterator,
+            topology_code=topology_code,
+            configuration=configuration,
+            vertex_positions=vertex_positions,
+        ).with_centroid(np.array((0.0, 0.0, 0.0)))
+    return constructed_molecule
 
 
 def analyse_cage(
@@ -538,7 +818,7 @@ def get_regraphed_molecule(
     scale: str,
     topology_code: cgx.scram.TopologyCode,
     iterator: cgx.scram.SkewedTopologyIterator,
-    bb_config: cgx.scram.BuildingBlockConfiguration | None,
+    bb_config: cgx.scram.Configuration | None,
 ) -> stk.ConstructedMolecule:
     """Take a graph that considers all atoms, and get atom positions."""
     logging.info(
@@ -571,7 +851,7 @@ def get_vertexset_molecule(
     scale: str,
     topology_code: cgx.scram.TopologyCode,
     iterator: cgx.scram.SkewedTopologyIterator,
-    bb_config: cgx.scram.BuildingBlockConfiguration,
+    bb_config: cgx.scram.Configuration,
 ) -> stk.ConstructedMolecule:
     """Take a graph and genereate from graph vertex positions.."""
     if scale is None:
@@ -823,7 +1103,7 @@ def optimise_cage(  # noqa: PLR0913, C901
 
 def get_bb_topology_code_graph(
     topology_code: cgx.scram.TopologyCode,
-    bb_config: cgx.scram.BuildingBlockConfiguration,
+    bb_config: cgx.scram.Configuration,
 ) -> rx.PyGraph:
     """Convert TopologyCode and BBConfig to rx graph."""
     graph: rx.PyGraph = rx.PyGraph(multigraph=True)
@@ -862,9 +1142,9 @@ def get_bb_topology_code_graph(
 
 def passes_graph_bb_iso(
     topology_code: cgx.scram.TopologyCode,
-    bb_config: cgx.scram.BuildingBlockConfiguration,
+    bb_config: cgx.scram.Configuration,
     run_topology_codes: abc.Sequence[
-        tuple[cgx.scram.TopologyCode, cgx.scram.BuildingBlockConfiguration]
+        tuple[cgx.scram.TopologyCode, cgx.scram.Configuration]
     ],
 ) -> bool:
     """Check if a graph and bb config pases isomorphism check."""

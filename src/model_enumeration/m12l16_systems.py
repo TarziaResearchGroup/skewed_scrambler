@@ -314,7 +314,7 @@ def make_summary_plot(
     for entry in cgx.utilities.AtomliteDatabase(database_path).get_entries():
         multi = entry.properties["multiplier"]
         energy = entry.properties["energy_per_bb"]
-        bac_angle = entry.properties["forcefield_dict"]["v_dict"]["b_a_c"]
+        bac_angle = entry.properties["forcefield_dict"]["v_dict"]["n_d_b"]
         bite_angle = (bac_angle - 90) * 2
 
         vstr = entry.key.split("_")[2]
@@ -411,7 +411,7 @@ def make_summary_plot(
     plt.close()
 
 
-def main() -> None:  # noqa: PLR0915, C901
+def main() -> None:  # noqa: C901, PLR0912, PLR0915
     """Run script."""
     args = _parse_args()
 
@@ -543,11 +543,11 @@ def main() -> None:  # noqa: PLR0915, C901
                     ).has_molecule(key=config_name):
                         continue
 
+                    conformer_db_path = calculation_dir / f"{config_name}.db"
                     for midx, (method, layout_type, scale) in enumerate(
                         attempts
                     ):
                         name = f"{config_name}_{midx}"
-                        conformer_db_path = calculation_dir / f"{name}.db"
 
                         try:
                             constructed_molecule = construct_cage(
@@ -707,6 +707,9 @@ def main() -> None:  # noqa: PLR0915, C901
         database_path=database_path,
         figure_dir=figure_dir,
         filename=f"{run_prefix}_5.png",
+    )
+    raise SystemExit(
+        "add a plot of planarity vs energy for all of these tests"
     )
 
 

@@ -4,12 +4,12 @@ import argparse
 import logging
 import os
 import pathlib
-import shutil
 import time
 from collections import abc, defaultdict
 
 # A fix for something with threads.
 os.environ["OMP_NUM_THREADS"] = "6"
+import agx
 import atomlite
 import cgexplore as cgx
 import matplotlib as mpl
@@ -25,16 +25,14 @@ from model_enumeration.mgen_utilities import (
     a2bead_d,
     abead_c,
     abead_d,
-    analyse_cage,
     binder_bead,
     c2bead_d,
     cbead_c,
     cbead_d,
+    construct_cage,
+    custom_optimise_cage,
     e2bead_d,
     ebead_c,
-    get_regraphed_molecule,
-    get_vertexset_molecule,
-    passes_graph_bb_iso,
     precursors_to_forcefield,
     tetra_bead,
 )
@@ -49,13 +47,13 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s",
 )
 RDLogger.DisableLog("rdApp.*")
-short_attempts = (
-    None,
-    # "regraphed-spring-10",
-    # "regraphed-kamada-10",
-    # "set-kamada-10",
-    # "set-spring-10",
-    # "set-spectral-10",
+attempts = (
+    # (None, None, None), # noqa: ERA001
+    ("set", "kamada", 10),
+    ("set", "spring", 10),
+    # ("set", "spectral", 10), # noqa: ERA001
+    # ("regraphed", "spring", 10),  # noqa: ERA001
+    ("regraphed", "kamada", 10),
 )
 seed_cs = {
     4: "tab:blue",
@@ -566,7 +564,7 @@ def add_generation_information(
     """Add generation information to the database."""
     for cs in generation.chromosomes:
         topology_idx, topology_code = cs.get_topology_information()
-        building_block_config = cs.get_vertex_alignments()[0]
+        building_block_config = cs.get_building_block_configurations()[0]
         name = f"{cs.prefix}_{topology_idx}_b{building_block_config.idx}"
         entry = cgx.utilities.AtomliteDatabase(database_path).get_entry(name)
         if "generation_id" not in entry.properties:
@@ -815,7 +813,7 @@ def fitness_function(  # noqa: PLR0913
     """Compute fitness."""
     database = cgx.utilities.AtomliteDatabase(database_path)
     topology_idx, topology_code = chromosome.get_topology_information()
-    building_block_config = chromosome.get_vertex_alignments()[0]
+    building_block_config = chromosome.get_building_block_configurations()[0]
 
     name = f"{chromosome.prefix}_{topology_idx}_b{building_block_config.idx}"
 
@@ -848,7 +846,7 @@ def structure_function(  # noqa: C901, PLR0912, PLR0915
     database = cgx.utilities.AtomliteDatabase(database_path)
 
     topology_idx, topology_code = chromosome.get_topology_information()
-    building_block_config = chromosome.get_vertex_alignments()[0]
+    building_block_config = chromosome.get_building_block_configurations()[0]
 
     base_name = (
         f"{chromosome.prefix}_{topology_idx}_b{building_block_config.idx}"
@@ -869,7 +867,7 @@ def structure_function(  # noqa: C901, PLR0912, PLR0915
         try:
             entry_tc = options["topology_codes"][
                 entry.properties["topology_idx"]
-            ]
+            ][1]
             entry_bb_config = options["bb_configs"][
                 entry.properties["bb_config_idx"]
             ]
@@ -884,10 +882,10 @@ def structure_function(  # noqa: C901, PLR0912, PLR0915
             continue
 
         # Testing bb-config aware graph check.
-        if not passes_graph_bb_iso(
-            topology_code=topology_code,
-            bb_config=building_block_config,
-            run_topology_codes=[(entry_tc[1], entry_bb_config)],
+        configured = agx.ConfiguredCode(topology_code, building_block_config)
+        if not agx.utilities.is_configured_code_isomorphic(
+            test_code=configured,
+            run_topology_codes=[agx.ConfiguredCode(entry_tc, entry_bb_config)],
         ):
             known_entry = entry
             break
@@ -895,7 +893,7 @@ def structure_function(  # noqa: C901, PLR0912, PLR0915
     # Try to avoid recalculation if possible.
     if (
         known_entry is not None
-        and known_entry.properties["base_name"] != base_name
+        and known_entry.properties["config_name"] != base_name
     ):
         database.add_molecule(
             key=base_name,
@@ -906,6 +904,7 @@ def structure_function(  # noqa: C901, PLR0912, PLR0915
             property_dict={
                 "is_duplicate": True,
                 "duplicate_of": known_entry.key,
+                "opt_passed": True,
             },
         )
 
@@ -922,71 +921,48 @@ def structure_function(  # noqa: C901, PLR0912, PLR0915
         return
 
     # Iterate over mashes.
-    generated_conformers = []
-    for midx, scale in enumerate(options["attempts"]):
+    conformer_db_path = calculation_output / f"{base_name}.db"
+    for midx, (method, layout_type, scale) in enumerate(attempts):
         name = f"{base_name}_{midx}"
 
         try:
-            if isinstance(scale, str) and "regraphed" in scale:
-                constructed_molecule = get_regraphed_molecule(
-                    scale=scale,
-                    topology_code=topology_code,
-                    iterator=options["iterator"],
-                    bb_config=building_block_config,
-                )
-
-            else:
-                constructed_molecule = get_vertexset_molecule(
-                    scale=scale,
-                    topology_code=topology_code,
-                    iterator=options["iterator"],
-                    bb_config=building_block_config,
-                )
+            constructed_molecule = construct_cage(
+                method=method,
+                layout_type=layout_type,  # type:ignore[arg-type]
+                scale=scale,  # type:ignore[arg-type]
+                topology_code=topology_code,
+                iterator=options["iterator"],
+                configuration=None,
+                vertex_positions=None,
+            )
         except ValueError:
             continue
-
-        constructed_molecule.write(calculation_output / f"{name}_unopt.mol")
 
         # Optimise and save.
         logging.info("building %s", name)
 
         try:
-            potential_names = [
-                f"{base_name}_{nmash_idx}"
-                for nmash_idx in range(len(options["attempts"]))
-            ]
-            if scale is None:
-                conformer = quick_graph_optimise_cage(
-                    molecule=constructed_molecule,
-                    name=name,
-                    output_dir=calculation_output,
-                    forcefield=options["forcefield"],
-                    platform=None,
-                    database_path=database_path,
-                )
-                # Copy the file over.
-                wipfinal = calculation_output / f"{name}_wipfinal.mol"
-                wipfinal_new = calculation_output / f"{name}_final.mol"
-                if wipfinal.exists():
-                    shutil.copy(wipfinal, wipfinal_new)
+            conformer = custom_optimise_cage(
+                molecule=constructed_molecule,
+                name=name,
+                output_dir=calculation_output,
+                forcefield=options["forcefield"],
+                platform=None,
+                database_path=conformer_db_path,
+                potential_names=[],
+            )
 
-            else:
-                conformer = cgx.scram.optimise_cage(
-                    molecule=constructed_molecule,
-                    name=name,
-                    output_dir=calculation_output,
-                    forcefield=options["forcefield"],
-                    platform=None,
-                    database_path=database_path,
-                    potential_names=potential_names,
-                )
-
-            if conformer is not None:
+            if (
+                conformer is not None
+                and conformer.energy_decomposition["total energy"][0]
+                is not None
+            ):
                 num_components = len(
                     stko.Network.init_from_molecule(
                         conformer.molecule
                     ).get_connected_components()
                 )
+
                 energy_per_bb = cgx.utilities.get_energy_per_bb(
                     energy_decomposition=(conformer.energy_decomposition),
                     number_building_blocks=(
@@ -995,63 +971,83 @@ def structure_function(  # noqa: C901, PLR0912, PLR0915
                 )
 
                 properties = {
-                    "base_name": base_name,
                     "forcefield_dict": (
                         options["forcefield"].get_forcefield_dictionary()
                     ),
                     "energy_per_bb": energy_per_bb,
+                    "num_components": num_components,
+                    "mash_idx": midx,
                     "l1": l1,
                     "l2": l2,
                     "pair": f"{l1}_{l2}",
-                    "num_components": num_components,
-                    "num_bbs": (options["iterator"].get_num_building_blocks()),
                     "stoichstring": stoichstring,
-                    "multiplier": multiplier,
+                    "config_name": base_name,
                     "topology_idx": topology_idx,
-                    "mash_idx": midx,
+                    "bb_config_idx": building_block_config.idx,
+                    "num_bbs": (options["iterator"].get_num_building_blocks()),
+                    "multiplier": str(multiplier),
                     "topology_code_vmap": tuple(
                         (int(i[0]), int(i[1]))
                         for i in topology_code.vertex_map
                     ),
-                    "bb_config_idx": building_block_config.idx,
-                    "contains_parallels": contains_parallels(topology_code),
                     # Add here, if it gets here, then it is not duplicate.
                     "is_duplicate": False,
                     "num_duplicates": 0,
                 }
-
-                database.add_properties(key=name, property_dict=properties)
-                generated_conformers.append(
-                    (
-                        name,
-                        conformer.molecule.with_centroid((0, 0, 0)),
-                        energy_per_bb,
-                    )
+                cgx.utilities.AtomliteDatabase(
+                    conformer_db_path
+                ).add_properties(
+                    key=name,
+                    property_dict=properties,  # type:ignore[arg-type]
                 )
 
-        except OpenMMException:
+        except (OpenMMException, ValueError):
             logging.info("failed optimisation of %s", name)
 
-    min_energy_conformer = sorted(generated_conformers, key=lambda p: p[2])[0]
-    min_energy_name, min_energy_structure, _ = min_energy_conformer
+    conformer_db = cgx.utilities.AtomliteDatabase(conformer_db_path)
+    min_energy_structure = None
+    min_energy = float("inf")
+    min_energy_key = None
+    for entry in conformer_db.get_entries():
+        # Handle failed opt.
+        if "energy_per_bb" not in entry.properties:
+            continue
 
-    min_energy_structure.write(str(structure_output / f"{base_name}_optc.mol"))
+        if (
+            float(entry.properties["energy_per_bb"])  # type:ignore[arg-type]
+            < min_energy
+        ):
+            min_energy = float(
+                entry.properties["energy_per_bb"]  # type:ignore[arg-type]
+            )
+            min_energy_structure = conformer_db.get_molecule(key=entry.key)
+            min_energy_key = entry.key
 
-    # Write base name to database.
-    database.add_molecule(
+    # To file.
+    min_energy_structure.write(  # type:ignore[union-attr]
+        str(structure_output / f"{base_name}_optc.mol")
+    )
+
+    # To database.
+    cgx.utilities.AtomliteDatabase(database_path).add_molecule(
+        molecule=min_energy_structure,  # type:ignore[arg-type]
         key=base_name,
-        molecule=database.get_molecule(min_energy_name),
     )
-    database.add_properties(
+    initial_properties = (
+        cgx.utilities.AtomliteDatabase(conformer_db_path)
+        .get_entry(min_energy_key)
+        .properties
+    )
+    cgx.utilities.AtomliteDatabase(database_path).add_properties(
         key=base_name,
-        property_dict=database.get_entry(min_energy_name).properties,
+        property_dict=initial_properties,
     )
-    database.add_properties(key=base_name, property_dict={"is_base": True})
-    analyse_cage(
-        database_path=database_path,
-        name=base_name,
-        forcefield=options["forcefield"],
+
+    properties = {"lowest_e_of_mash": True, "is_base": True}
+    cgx.utilities.AtomliteDatabase(database_path).add_properties(
+        key=base_name, property_dict=properties
     )
+    return
 
 
 def plot_timings(figure_dir: pathlib.Path, data_dir: pathlib.Path) -> None:
@@ -2022,30 +2018,22 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
     database_path = data_dir / f"{run_prefix}.db"
     plot_fitness_curve(figure_dir)
 
-    stoichiometries_l_s_m = (
-        (9, 9, 9),
-        (6, 12, 9),  ## This is the target.
-        (12, 6, 9),
-        (2, 2, 2),
-        (1, 3, 2),
-        (3, 1, 2),
-        (3, 3, 3),
-        (2, 4, 3),
-        (4, 2, 3),
-        (4, 4, 4),
-        (5, 5, 5),
-        (6, 6, 6),
-        (4, 8, 6),
-        (8, 4, 6),
-        (7, 7, 7),
-        (8, 8, 8),
+    stoichiometries_l_s_m = set()
+    for n_tetra in range(2, 10):
+        n_ditopic = 2 * n_tetra
+
+        for m in range(n_ditopic):
+            stoichiometries_l_s_m.add((m, n_ditopic - m, n_tetra))
+            stoichiometries_l_s_m.add((n_ditopic - m, m, n_tetra))
+
+    stoichiometries_l_s_m = sorted(
+        stoichiometries_l_s_m,
+        key=lambda stoichiometries_l_s_m: stoichiometries_l_s_m[2],
     )
-    raise SystemExit("add all possibilities")
+    logging.info("there are %s stoichiometries", len(stoichiometries_l_s_m))
+
     ligand_measures = {
         "cs41a": {"ba": 1.5, "aa": 9.5, "bac": 145},
-        "cs41b": {"ba": 5.7, "aa": 2.4, "bac": 145},
-        "cs41c": {"ba": 1.5, "aa": 9.5, "bac": 150},
-        "cs41d": {"ba": 5.7, "aa": 2.4, "bac": 150},
         "cs490": {"ba": 1.5, "aa": 5.9, "bac": 135},
     }
     ligand_types = {
@@ -2057,10 +2045,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
     }
     pairs_to_predict = [
         # large, small.
-        ("cs490", "cs41c"),
-        ("cs490", "cs41d"),
         ("cs490", "cs41a"),
-        ("cs490", "cs41b"),
     ]
 
     pairs = define_pairs(pairs_to_predict, ligand_types)
@@ -2158,10 +2143,10 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
             for stoichiometry_l_s_m in stoichiometries_l_s_m:
                 stoichstring = "-".join([str(i) for i in stoichiometry_l_s_m])
 
-                multiplier = stoichiometry_l_s_m[2]
                 logging.info(
                     "doing: pair %s, stoichstring %s", pair, stoichstring
                 )
+
                 # Define a connectivity based on a multiplier.
                 iterator = cgx.scram.SkewedTopologyIterator(
                     building_block_counts={
@@ -2182,12 +2167,10 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                     len(topology_codes),
                     len(all_topology_codes),
                 )
-                logging.info("filtering for parallels!")
-                raise SystemExit
+                if len(topology_codes) != len(all_topology_codes):
+                    raise RuntimeError
 
-                possible_bbdicts = cgx.scram.get_custom_bb_configurations(
-                    iterator=iterator
-                )
+                possible_bbdicts = iterator.get_configurations()
                 logging.info(
                     "building block iteration has %s options",
                     len(possible_bbdicts),
@@ -2205,11 +2188,10 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                 chromo_it.add_gene(
                     iteration=possible_bbdicts,
                     # This gene type is out of date now.
-                    gene_type="vertex_alignment",
+                    gene_type="building_block_configuration",
                 )
 
                 # Define fitness calculator.
-                raise SystemExit("implement this cheap one")
                 fitness_calculator = (
                     cgx.systems_optimisation.FitnessCalculator(
                         fitness_function=fitness_function,
@@ -2233,7 +2215,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                             "bb_configs": possible_bbdicts,
                             "iterator": iterator,
                             "forcefield": forcefield,
-                            "attempts": short_attempts,
+                            "attempts": attempts,
                         },
                     )
                 )
@@ -2280,7 +2262,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                     previous_best = (
                         f"{best_chromosome.prefix}"
                         f"_{best_chromosome.get_topology_information()[0]}_"
-                        f"b{best_chromosome.get_vertex_alignments()[0].idx}"
+                        f"b{best_chromosome.get_building_block_configurations()[0].idx}"
                     )
                     for generation_id in range(
                         1, short_scan_config["num_generations"] + 1
@@ -2307,9 +2289,17 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                             num_mutate = short_scan_config["mutations"] * 1
 
                         merged_chromosomes = []
+                        chromosome_list = {
+                            (
+                                f"{chromosome.prefix}"
+                                f"_{chromosome.get_topology_information()[0]}"
+                                f"_b{chromosome.get_building_block_configurations()[0].idx}"
+                            ): chromosome
+                            for chromosome in generation.chromosomes
+                        }
                         merged_chromosomes.extend(
                             chromo_it.mutate_population(
-                                list_of_chromosomes=generation.chromosomes,
+                                chromosomes=chromosome_list,
                                 generator=generator,
                                 gene_range=chromo_it.get_topo_ids(),
                                 selection="random",
@@ -2321,9 +2311,9 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                         )
                         merged_chromosomes.extend(
                             chromo_it.mutate_population(
-                                list_of_chromosomes=generation.chromosomes,
+                                chromosomes=chromosome_list,
                                 generator=generator,
-                                gene_range=chromo_it.get_va_ids(),
+                                gene_range=chromo_it.get_bc_ids(),
                                 selection="random",
                                 num_to_select=num_mutate,
                                 database=cgx.utilities.AtomliteDatabase(
@@ -2334,7 +2324,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
 
                         merged_chromosomes.extend(
                             chromo_it.crossover_population(
-                                list_of_chromosomes=generation.chromosomes,
+                                chromosomes=chromosome_list,
                                 generator=generator,
                                 selection="random",
                                 num_to_select=num_mutate,
@@ -2351,7 +2341,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                                     (
                                         f"{i.prefix}"
                                         f"_{i.get_topology_information()[0]}"
-                                        f"_b{i.get_vertex_alignments()[0].idx}"
+                                        f"_b{i.get_building_block_configurations()[0].idx}"
                                     ): i
                                     for i in generation.chromosomes
                                 },
@@ -2371,12 +2361,12 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                                     (
                                         f"{i.prefix}"
                                         f"_{i.get_topology_information()[0]}"
-                                        f"_b{i.get_vertex_alignments()[0].idx}"
+                                        f"_b{i.get_building_block_configurations()[0].idx}"
                                     ): i
                                     for i in generation.chromosomes
                                 },
                                 generator=generator,
-                                gene_range=chromo_it.get_va_ids(),
+                                gene_range=chromo_it.get_bc_ids(),
                                 selection="roulette",
                                 num_to_select=num_mutate,
                                 database=cgx.utilities.AtomliteDatabase(
@@ -2392,7 +2382,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                                     (
                                         f"{i.prefix}"
                                         f"_{i.get_topology_information()[0]}"
-                                        f"_b{i.get_vertex_alignments()[0].idx}"
+                                        f"_b{i.get_building_block_configurations()[0].idx}"
                                     ): i
                                     for i in generation.chromosomes
                                 },
@@ -2474,7 +2464,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                         best_name = (
                             f"{best_chromosome.prefix}"
                             f"_{best_chromosome.get_topology_information()[0]}_"
-                            f"b{best_chromosome.get_vertex_alignments()[0].idx}"
+                            f"b{best_chromosome.get_building_block_configurations()[0].idx}"
                         )
                         if best_name != previous_best:
                             count_unchanged = 0
@@ -2561,7 +2551,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                     previous_best = (
                         f"{best_chromosome.prefix}"
                         f"_{best_chromosome.get_topology_information()[0]}_"
-                        f"b{best_chromosome.get_vertex_alignments()[0].idx}"
+                        f"b{best_chromosome.get_building_block_configurations()[0].idx}"
                     )
                     for generation_id in range(
                         1, long_scan_config["num_generations"] + 1
@@ -2588,9 +2578,17 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                             num_mutate = long_scan_config["mutations"] * 1
 
                         merged_chromosomes = []
+                        chromosome_list = {
+                            (
+                                f"{chromosome.prefix}"
+                                f"_{chromosome.get_topology_information()[0]}"
+                                f"_b{chromosome.get_building_block_configurations()[0].idx}"
+                            ): chromosome
+                            for chromosome in generation.chromosomes
+                        }
                         merged_chromosomes.extend(
                             chromo_it.mutate_population(
-                                list_of_chromosomes=generation.chromosomes,
+                                chromosomes=chromosome_list,
                                 generator=generator,
                                 gene_range=chromo_it.get_topo_ids(),
                                 selection="random",
@@ -2602,9 +2600,9 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                         )
                         merged_chromosomes.extend(
                             chromo_it.mutate_population(
-                                list_of_chromosomes=generation.chromosomes,
+                                chromosomes=chromosome_list,
                                 generator=generator,
-                                gene_range=chromo_it.get_va_ids(),
+                                gene_range=chromo_it.get_bc_ids(),
                                 selection="random",
                                 num_to_select=num_mutate,
                                 database=cgx.utilities.AtomliteDatabase(
@@ -2612,10 +2610,9 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                                 ),
                             )
                         )
-
                         merged_chromosomes.extend(
                             chromo_it.crossover_population(
-                                list_of_chromosomes=generation.chromosomes,
+                                chromosomes=chromosome_list,
                                 generator=generator,
                                 selection="random",
                                 num_to_select=num_mutate,
@@ -2626,16 +2623,8 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                         )
 
                         merged_chromosomes.extend(
-                            roulette_mutate_population(
-                                chromo_it=chromo_it,
-                                chromosomes={
-                                    (
-                                        f"{i.prefix}"
-                                        f"_{i.get_topology_information()[0]}"
-                                        f"_b{i.get_vertex_alignments()[0].idx}"
-                                    ): i
-                                    for i in generation.chromosomes
-                                },
+                            chromo_it.mutate_population(
+                                chromosomes=chromosome_list,
                                 generator=generator,
                                 gene_range=chromo_it.get_topo_ids(),
                                 selection="roulette",
@@ -2646,18 +2635,10 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                             )
                         )
                         merged_chromosomes.extend(
-                            roulette_mutate_population(
-                                chromo_it=chromo_it,
-                                chromosomes={
-                                    (
-                                        f"{i.prefix}"
-                                        f"_{i.get_topology_information()[0]}"
-                                        f"_b{i.get_vertex_alignments()[0].idx}"
-                                    ): i
-                                    for i in generation.chromosomes
-                                },
+                            chromo_it.mutate_population(
+                                chromosomes=chromosome_list,
                                 generator=generator,
-                                gene_range=chromo_it.get_va_ids(),
+                                gene_range=chromo_it.get_bc_ids(),
                                 selection="roulette",
                                 num_to_select=num_mutate,
                                 database=cgx.utilities.AtomliteDatabase(
@@ -2665,18 +2646,9 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                                 ),
                             )
                         )
-
                         merged_chromosomes.extend(
-                            roulette_crossover_population(
-                                chromo_it=chromo_it,
-                                chromosomes={
-                                    (
-                                        f"{i.prefix}"
-                                        f"_{i.get_topology_information()[0]}"
-                                        f"_b{i.get_vertex_alignments()[0].idx}"
-                                    ): i
-                                    for i in generation.chromosomes
-                                },
+                            chromo_it.crossover_population(
+                                chromosomes=chromosome_list,
                                 generator=generator,
                                 selection="roulette",
                                 num_to_select=num_mutate,
@@ -2753,7 +2725,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                         best_name = (
                             f"{best_chromosome.prefix}"
                             f"_{best_chromosome.get_topology_information()[0]}_"
-                            f"b{best_chromosome.get_vertex_alignments()[0].idx}"
+                            f"b{best_chromosome.get_building_block_configurations()[0].idx}"
                         )
                         if best_name != previous_best:
                             count_unchanged = 0
@@ -2841,12 +2813,12 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                                     (
                                         f"{i.prefix}"
                                         f"_{i.get_topology_information()[0]}"
-                                        f"_b{i.get_vertex_alignments()[0].idx}"
+                                        f"_b{i.get_building_block_configurations()[0].idx}"
                                     ): i
                                     for i in generation.chromosomes
                                 },
                                 selection="all",
-                                gene_range=chromo_it.get_va_ids(),
+                                gene_range=chromo_it.get_bc_ids(),
                             )
                         )
 
@@ -2917,7 +2889,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                         best_name = (
                             f"{best_chromosome.prefix}"
                             f"_{best_chromosome.get_topology_information()[0]}_"
-                            f"b{best_chromosome.get_vertex_alignments()[0].idx}"
+                            f"b{best_chromosome.get_building_block_configurations()[0].idx}"
                         )
 
                         logging.info(

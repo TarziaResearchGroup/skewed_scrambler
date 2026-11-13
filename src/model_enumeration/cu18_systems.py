@@ -532,7 +532,7 @@ def structure_function(  # noqa: C901, PLR0912, PLR0915
                 scale=scale,  # type:ignore[arg-type]
                 topology_code=topology_code,
                 iterator=options["iterator"],
-                configuration=None,
+                configuration=building_block_config,
                 vertex_positions=None,
             )
         except ValueError:
@@ -1748,13 +1748,33 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                 )
 
                 # Define a connectivity based on a multiplier.
-                iterator = cgx.scram.SkewedTopologyIterator(
-                    building_block_counts={
-                        tetra_bb: stoichiometry_l_s_m[2],
-                        large_bb: stoichiometry_l_s_m[0],
-                        small_bb: stoichiometry_l_s_m[1],
-                    },
-                )
+                actual_stoich = tuple(i for i in stoichiometry_l_s_m if i != 0)
+                if len(actual_stoich) == 3:  # noqa: PLR2004
+                    iterator = cgx.scram.SkewedTopologyIterator(
+                        building_block_counts={
+                            tetra_bb: stoichiometry_l_s_m[2],
+                            large_bb: stoichiometry_l_s_m[0],
+                            small_bb: stoichiometry_l_s_m[1],
+                        },
+                    )
+                else:
+                    missing_id = list(stoichiometry_l_s_m).index(0)
+
+                    if missing_id == 0:
+                        iterator = cgx.scram.SkewedTopologyIterator(
+                            building_block_counts={
+                                tetra_bb: stoichiometry_l_s_m[2],
+                                small_bb: stoichiometry_l_s_m[1],
+                            },
+                        )
+                    else:
+                        iterator = cgx.scram.SkewedTopologyIterator(
+                            building_block_counts={
+                                tetra_bb: stoichiometry_l_s_m[2],
+                                large_bb: stoichiometry_l_s_m[0],
+                            },
+                        )
+
                 all_topology_codes = tuple(enumerate(iterator.yield_graphs()))
                 topology_codes = []
                 for tidx, tc in all_topology_codes:
@@ -1868,15 +1888,12 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                         1, short_scan_config["num_generations"] + 1
                     ):
                         logging.info(
-                            "doing generation %s of seed %s",
+                            "doing generation %s of seed %s of size %s",
                             generation_id,
                             seed,
-                        )
-
-                        logging.info(
-                            "initial size is %s.",
                             generation.get_generation_size(),
                         )
+
                         if (
                             count_unchanged
                             == short_scan_config["count_to_spam"]
@@ -1935,16 +1952,8 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                         )
 
                         merged_chromosomes.extend(
-                            roulette_mutate_population(
-                                chromo_it=chromo_it,
-                                chromosomes={
-                                    (
-                                        f"{i.prefix}"
-                                        f"_{i.get_topology_information()[0]}"
-                                        f"_b{i.get_building_block_configurations()[0].idx}"
-                                    ): i
-                                    for i in generation.chromosomes
-                                },
+                            chromo_it.mutate_population(
+                                chromosomes=chromosome_list,
                                 generator=generator,
                                 gene_range=chromo_it.get_topo_ids(),
                                 selection="roulette",
@@ -1955,16 +1964,8 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                             )
                         )
                         merged_chromosomes.extend(
-                            roulette_mutate_population(
-                                chromo_it=chromo_it,
-                                chromosomes={
-                                    (
-                                        f"{i.prefix}"
-                                        f"_{i.get_topology_information()[0]}"
-                                        f"_b{i.get_building_block_configurations()[0].idx}"
-                                    ): i
-                                    for i in generation.chromosomes
-                                },
+                            chromo_it.mutate_population(
+                                chromosomes=chromosome_list,
                                 generator=generator,
                                 gene_range=chromo_it.get_bc_ids(),
                                 selection="roulette",
@@ -1974,18 +1975,9 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                                 ),
                             )
                         )
-
                         merged_chromosomes.extend(
-                            roulette_crossover_population(
-                                chromo_it=chromo_it,
-                                chromosomes={
-                                    (
-                                        f"{i.prefix}"
-                                        f"_{i.get_topology_information()[0]}"
-                                        f"_b{i.get_building_block_configurations()[0].idx}"
-                                    ): i
-                                    for i in generation.chromosomes
-                                },
+                            chromo_it.crossover_population(
+                                chromosomes=chromosome_list,
                                 generator=generator,
                                 selection="roulette",
                                 num_to_select=num_mutate,
@@ -2045,10 +2037,6 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                             structure_calculator=structure_calculator,
                             num_processes=short_scan_config["num_processes"],
                         )
-                        logging.info(
-                            "final size is %s.",
-                            generation.get_generation_size(),
-                        )
 
                         progress_plot(
                             seeded_generations=seeded_generations,
@@ -2073,7 +2061,11 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                             count_unchanged += 1
 
                         logging.info(
-                            "top scorer is %s (seed: %s)", best_name, seed
+                            "decreased down to final size of %s with top "
+                            "scorer: %s (seed: %s)",
+                            generation.get_generation_size(),
+                            best_name,
+                            seed,
                         )
 
                 # Report.
@@ -2157,15 +2149,12 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                         1, long_scan_config["num_generations"] + 1
                     ):
                         logging.info(
-                            "doing generation %s of seed %s",
+                            "doing generation %s of seed %s with size %s",
                             generation_id,
                             seed,
-                        )
-
-                        logging.info(
-                            "initial size is %s.",
                             generation.get_generation_size(),
                         )
+
                         if (
                             count_unchanged
                             == long_scan_config["count_to_spam"]
@@ -2306,10 +2295,6 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                             structure_calculator=structure_calculator,
                             num_processes=long_scan_config["num_processes"],
                         )
-                        logging.info(
-                            "final size is %s.",
-                            generation.get_generation_size(),
-                        )
 
                         progress_plot(
                             seeded_generations=seeded_generations,
@@ -2334,7 +2319,11 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                             count_unchanged += 1
 
                         logging.info(
-                            "top scorer is %s (seed: %s)", best_name, seed
+                            "decreased down to final size of %s with top "
+                            "scorer: %s (seed: %s)",
+                            generation.get_generation_size(),
+                            best_name,
+                            seed,
                         )
 
                 # Run neighbour scan over top candidates.
@@ -2396,26 +2385,22 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                         1, n_scan_config["num_generations"] + 1
                     ):
                         logging.info(
-                            "doing generation %s of seed %s",
+                            "doing generation %s of seed %s of size %s",
                             generation_id,
                             seed,
-                        )
-                        logging.info(
-                            "initial size is %s.",
                             generation.get_generation_size(),
                         )
 
                         merged_chromosomes = []
                         merged_chromosomes.extend(
-                            get_population_neighbours(
-                                chromo_it=chromo_it,
+                            chromo_it.get_population_neighbours(
                                 chromosomes={
                                     (
-                                        f"{i.prefix}"
-                                        f"_{i.get_topology_information()[0]}"
-                                        f"_b{i.get_building_block_configurations()[0].idx}"
-                                    ): i
-                                    for i in generation.chromosomes
+                                        f"{chromosome.prefix}"
+                                        f"_{chromosome.get_topology_information()[0]}"
+                                        f"_b{chromosome.get_building_block_configurations()[0].idx}"
+                                    ): chromosome
+                                    for chromosome in generation.chromosomes
                                 },
                                 selection="all",
                                 gene_range=chromo_it.get_bc_ids(),
@@ -2470,10 +2455,6 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                             structure_calculator=structure_calculator,
                             num_processes=n_scan_config["num_processes"],
                         )
-                        logging.info(
-                            "final size is %s.",
-                            generation.get_generation_size(),
-                        )
 
                         progress_plot(
                             seeded_generations=seeded_generations,
@@ -2493,7 +2474,11 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                         )
 
                         logging.info(
-                            "top scorer is %s (seed: %s)", best_name, seed
+                            "decreased down to final size of %s with top "
+                            "scorer: %s (seed: %s)",
+                            generation.get_generation_size(),
+                            best_name,
+                            seed,
                         )
 
     for pair in pairs:

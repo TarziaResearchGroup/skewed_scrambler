@@ -1863,7 +1863,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                     )
 
                     generation.run_structures()
-                    _ = generation.calculate_fitness_values()
+                    _ = generation.calculate_fitness_values(verbose=True)
                     generations.append(generation)
                     seeded_generations[seed].append(generation)
 
@@ -2009,7 +2009,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                         generation.run_structures()
                         str_time = time.time() - st
                         st = time.time()
-                        _ = generation.calculate_fitness_values()
+                        _ = generation.calculate_fitness_values(verbose=True)
                         fit_time = time.time() - st
                         with timing_file.open("a") as f:
                             f.write(f"{str_time},{fit_time}\n")
@@ -2124,7 +2124,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                     )
 
                     generation.run_structures()
-                    _ = generation.calculate_fitness_values()
+                    _ = generation.calculate_fitness_values(verbose=True)
                     generations.append(generation)
                     seeded_generations[seed].append(generation)
 
@@ -2267,7 +2267,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                         generation.run_structures()
                         str_time = time.time() - st
                         st = time.time()
-                        _ = generation.calculate_fitness_values()
+                        _ = generation.calculate_fitness_values(verbose=True)
                         fit_time = time.time() - st
                         with timing_file.open("a") as f:
                             f.write(f"{str_time},{fit_time}\n")
@@ -2369,7 +2369,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                     )
 
                     generation.run_structures()
-                    _ = generation.calculate_fitness_values()
+                    _ = generation.calculate_fitness_values(verbose=True)
                     generations.append(generation)
                     seeded_generations[seed].append(generation)
 
@@ -2427,7 +2427,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                         generation.run_structures()
                         str_time = time.time() - st
                         st = time.time()
-                        _ = generation.calculate_fitness_values()
+                        _ = generation.calculate_fitness_values(verbose=True)
                         fit_time = time.time() - st
                         with timing_file.open("a") as f:
                             f.write(f"{str_time},{fit_time}\n")
